@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     live_mode: str = "cascaded"
     # Gemini Live model + voice for gemini_realtime mode. Valid model ids come
     # from livekit-plugins-google's LiveAPIModels; voice from its Voice list.
+    # The native-audio model is the one compatible with the agent's proactive
+    # speaking (session.generate_reply — how the interviewer asks each question);
+    # the faster flash-live model raises "generate_reply is not compatible", so
+    # it can't drive this interview flow. Override via GEMINI_REALTIME_MODEL.
     gemini_realtime_model: str = "gemini-2.5-flash-native-audio-preview-12-2025"
     gemini_realtime_voice: str = "Puck"
     # OpenAI Realtime (openai_realtime mode). Its own key + endpoint, kept
