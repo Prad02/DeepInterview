@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import random
 from typing import TYPE_CHECKING, Any
 
 from ..logging import get_logger
@@ -24,6 +25,24 @@ log = get_logger(__name__)
 # Per-call ceiling so a stalled provider call can never hang a pipeline forever
 # (the prep graph's per-node try/except only fires once the call RETURNS).
 _DEFAULT_TIMEOUT_SEC = 90.0
+
+# Custom OpenAI-compatible proxies (often behind Cloudflare) can reject a
+# fraction of *concurrent* requests with 421 Misdirected Request due to HTTP
+# connection coalescing — the sequential prep calls succeed, but the parallel
+# scoring/report fan-out trips it. For a custom base_url we therefore cap
+# concurrency and retry these transient statuses so the fan-out completes.
+_OPENAI_RETRY_STATUSES = frozenset({421, 429, 500, 502, 503, 504})
+_OPENAI_MAX_RETRIES = 4
+_OPENAI_MAX_CONCURRENCY = 3
+_openai_semaphore: asyncio.Semaphore | None = None
+
+
+def _get_openai_semaphore() -> asyncio.Semaphore:
+    """Lazily create the shared concurrency gate (bound to the running loop)."""
+    global _openai_semaphore
+    if _openai_semaphore is None:
+        _openai_semaphore = asyncio.Semaphore(_OPENAI_MAX_CONCURRENCY)
+    return _openai_semaphore
 
 
 def _schema_prompt(system: str, schema: type) -> str:
@@ -141,33 +160,88 @@ class OpenAILLM:
         api_key: str,
         model: str,
         timeout_sec: float = _DEFAULT_TIMEOUT_SEC,
+        base_url: str | None = None,
     ) -> None:
         # No default model — see GeminiLLM.__init__; Settings.openai_model is
         # the single source of truth.
         self._api_key = api_key
         self._model = model
         self._timeout = timeout_sec
+        # Optional OpenAI-compatible endpoint (proxy/gateway/self-host). None =>
+        # the SDK default (api.openai.com).
+        self._base_url = base_url
+        self._client_obj: Any = None
 
     def _client(self) -> Any:
+        if self._client_obj is not None:
+            return self._client_obj
         try:
             from openai import AsyncOpenAI
         except ImportError as exc:  # pragma: no cover - depends on optional SDK
             raise RuntimeError(
                 "openai is not installed; install the 'openai' extra."
             ) from exc
-        return AsyncOpenAI(api_key=self._api_key)
+        if self._base_url:
+            import httpx
+
+            # Two custom-endpoint accommodations:
+            #  - Some gateways reject the SDK's default "OpenAI/Python ..."
+            #    User-Agent (403 "Your request was blocked."), so send a neutral
+            #    UA.
+            #  - Disable HTTP keep-alive (fresh connection per request) to reduce
+            #    the connection-coalescing 421s; the retry loop in `_create`
+            #    mops up the rest. `max_retries=0` because we own the retry.
+            self._client_obj = AsyncOpenAI(
+                api_key=self._api_key,
+                base_url=self._base_url,
+                default_headers={"User-Agent": "deepinterview-agent/0.2"},
+                max_retries=0,
+                http_client=httpx.AsyncClient(
+                    timeout=self._timeout,
+                    limits=httpx.Limits(max_keepalive_connections=0, max_connections=6),
+                ),
+            )
+        else:
+            self._client_obj = AsyncOpenAI(api_key=self._api_key)
+        return self._client_obj
+
+    async def _create(self, **kwargs: Any) -> Any:
+        """Chat-completion call with a timeout, plus (for custom endpoints) a
+        concurrency cap and retry on transient proxy statuses (e.g. 421)."""
+        client = self._client()
+        if not self._base_url:
+            return await asyncio.wait_for(
+                client.chat.completions.create(**kwargs), timeout=self._timeout
+            )
+        from openai import APIConnectionError, APIStatusError
+
+        sem = _get_openai_semaphore()
+        async with sem:
+            last_exc: Exception | None = None
+            for attempt in range(_OPENAI_MAX_RETRIES + 1):
+                try:
+                    return await asyncio.wait_for(
+                        client.chat.completions.create(**kwargs), timeout=self._timeout
+                    )
+                except (APIStatusError, APIConnectionError) as exc:
+                    last_exc = exc
+                    status = getattr(exc, "status_code", None)
+                    retriable = isinstance(exc, APIConnectionError) or (
+                        status in _OPENAI_RETRY_STATUSES
+                    )
+                    if attempt >= _OPENAI_MAX_RETRIES or not retriable:
+                        raise
+                    await asyncio.sleep(0.4 * (attempt + 1) + random.random() * 0.3)
+            assert last_exc is not None  # pragma: no cover
+            raise last_exc
 
     async def complete_text(self, *, system: str, user: str) -> str:
-        client = self._client()
-        resp = await asyncio.wait_for(
-            client.chat.completions.create(
-                model=self._model,
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-            ),
-            timeout=self._timeout,
+        resp = await self._create(
+            model=self._model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
         )
         return resp.choices[0].message.content or ""
 
@@ -177,17 +251,13 @@ class OpenAILLM:
         # ``LocalizedText = dict[str, str]``, which would silently break the
         # question planner (every plan falling back to mock). Same pattern as
         # the Gemini adapter; Pydantic validates the result either way.
-        client = self._client()
-        resp = await asyncio.wait_for(
-            client.chat.completions.create(
-                model=self._model,
-                messages=[
-                    {"role": "system", "content": _schema_prompt(system, schema)},
-                    {"role": "user", "content": user},
-                ],
-                response_format={"type": "json_object"},
-            ),
-            timeout=self._timeout,
+        resp = await self._create(
+            model=self._model,
+            messages=[
+                {"role": "system", "content": _schema_prompt(system, schema)},
+                {"role": "user", "content": user},
+            ],
+            response_format={"type": "json_object"},
         )
         return schema.model_validate(_loads_json(resp.choices[0].message.content or "{}"))
 
@@ -205,7 +275,12 @@ def get_llm(settings: Settings) -> LLMAdapter:
         return MockLLM()
     if provider == "openai":
         if settings.openai_api_key:
-            return OpenAILLM(settings.openai_api_key, settings.openai_model, timeout)
+            return OpenAILLM(
+                settings.openai_api_key,
+                settings.openai_model,
+                timeout,
+                base_url=getattr(settings, "openai_base_url", None),
+            )
         log.warning("llm_provider=openai but openai_api_key is missing; using MockLLM.")
         return MockLLM()
     log.warning("Unknown llm_provider=%r; using MockLLM.", provider)

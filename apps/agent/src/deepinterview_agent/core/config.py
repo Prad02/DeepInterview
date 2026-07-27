@@ -52,6 +52,11 @@ class Settings(BaseSettings):
     # --- provider credentials (all optional) ---------------------------------
     gemini_api_key: str | None = None
     openai_api_key: str | None = None
+    # OpenAI-compatible base URL. Set for a proxy / gateway / self-hosted or
+    # third-party OpenAI-compatible endpoint (e.g. an LLM router that fronts
+    # Claude/Gemini/Grok behind the OpenAI chat-completions API). Leave unset to
+    # hit api.openai.com. Env-overridable via OPENAI_BASE_URL.
+    openai_base_url: str | None = None
     soniox_api_key: str | None = None
     deepgram_api_key: str | None = None
     cartesia_api_key: str | None = None
