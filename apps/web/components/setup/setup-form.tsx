@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { UploadCloud, FileText, X } from "lucide-react";
 import {
   LANGUAGES,
@@ -43,9 +43,8 @@ const OFFERED: Language[] = (
 
 type Step = { key: string; label: string };
 
-// Friendly client-side minimums. The backend is the real guard — these just
-// block obviously-empty / garbage-short submits with a helpful nudge.
-const MIN_JD_CHARS = 40;
+// Friendly client-side minimum for the CV (the backend is the real guard). JD
+// is optional (see jdError below), so it has no minimum.
 const MIN_CV_CHARS = 30;
 // Max CV file size. Matches the /api/upload ceiling; also keeps the no-R2
 // data-URL fallback (base64 is ~+33%) under the Next server-action body limit.
@@ -84,9 +83,14 @@ export function SetupForm({ r2Configured }: { r2Configured: boolean }) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const [file, setFile] = useState<File | null>(null);
+  const [name, setName] = useState("");
   const [cvText, setCvText] = useState("");
   const [jdText, setJdText] = useState("");
   const [company, setCompany] = useState("");
+  // Saved-profile state: prefill the CV on load, and let the user save it back.
+  const [profileLoaded, setProfileLoaded] = useState(false);
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [profileSaved, setProfileSaved] = useState(false);
   const [primary, setPrimary] = useState<Language>("en");
   const [mixed, setMixed] = useState(false);
   const [personaId, setPersonaId] = useState(DEFAULT_PERSONA_ID);
@@ -99,14 +103,57 @@ export function SetupForm({ r2Configured }: { r2Configured: boolean }) {
   // attempted submit) — not on first load. Decoupled from submit because the
   // submit button is disabled while invalid, so it never fires onSubmit.
   const [cvTouched, setCvTouched] = useState(false);
-  const [jdTouched, setJdTouched] = useState(false);
+
+  // Auto-fill from the saved local profile on first load, so the CV doesn't
+  // have to be re-pasted every session. Only fills empty fields — never
+  // clobbers something the user has already typed / a chosen file.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/profile");
+        if (!res.ok) return;
+        const p = (await res.json()) as { name?: string; cvText?: string };
+        if (cancelled) return;
+        if (p.name) setName((n) => n || p.name!);
+        if (p.cvText) setCvText((c) => c || p.cvText!);
+      } catch {
+        // No profile / offline — fine, the form just starts empty.
+      } finally {
+        if (!cancelled) setProfileLoaded(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Save the current name + CV text to the local profile file for next time.
+  async function saveProfileNow() {
+    setSavingProfile(true);
+    setProfileSaved(false);
+    try {
+      const res = await fetch("/api/profile", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: name.trim(), cvText: cvText.trim() }),
+      });
+      if (res.ok) {
+        setProfileSaved(true);
+        setTimeout(() => setProfileSaved(false), 2500);
+      }
+    } catch {
+      // Best-effort — a failed save just means they re-paste next time.
+    } finally {
+      setSavingProfile(false);
+    }
+  }
 
   // --- Client-side input validation (friendly; backend is the real guard) ---
   // CV is satisfied by a chosen file (length unknown synchronously) OR pasted
   // text of at least MIN_CV_CHARS. JD must be present + reasonably long.
   // Company is optional.
   const cvLen = cvText.trim().length;
-  const jdLen = jdText.trim().length;
   const cvError = !file
     ? cvLen === 0
       ? t(messages, "setup.needCv")
@@ -116,13 +163,10 @@ export function SetupForm({ r2Configured }: { r2Configured: boolean }) {
     : file.size > MAX_CV_BYTES
       ? `That file is too large (max ${Math.floor(MAX_CV_BYTES / (1024 * 1024))} MB). Upload a smaller CV or paste the text.`
       : null;
-  const jdError =
-    jdLen === 0
-      ? t(messages, "setup.needJd")
-      : jdLen < MIN_JD_CHARS
-        ? `Paste the full posting — this looks too short (at least ${MIN_JD_CHARS} characters).`
-        : null;
-  const canSubmit = !cvError && !jdError && !submitting;
+  // JD is OPTIONAL now: leave it blank for a general-practice interview, type a
+  // short role/title (the LLM expands it), or paste a full posting. Only the CV
+  // gates submit.
+  const canSubmit = !cvError && !submitting;
 
   // Fill the form with a matched sample (testing / demo). Clears any chosen file
   // so the pasted sample CV text is what gets submitted.
@@ -133,7 +177,6 @@ export function SetupForm({ r2Configured }: { r2Configured: boolean }) {
     setJdText(s.jd);
     setCompany(s.company);
     setCvTouched(false);
-    setJdTouched(false);
     setError(null);
   }
 
@@ -188,11 +231,10 @@ export function SetupForm({ r2Configured }: { r2Configured: boolean }) {
     e.preventDefault();
     setError(null);
 
-    // Client-side validation. CV can be a file OR pasted text; JD required +
-    // min length; company is optional. Surface inline field errors and bail.
-    if (cvError || jdError) {
+    // Client-side validation. CV can be a file OR pasted text. JD and company
+    // are optional (blank JD => general practice). Only the CV gates submit.
+    if (cvError) {
       setCvTouched(true);
-      setJdTouched(true);
       return;
     }
 
@@ -346,9 +388,25 @@ export function SetupForm({ r2Configured }: { r2Configured: boolean }) {
       <Card>
         <CardHeader>
           <CardTitle>{t(messages, "setup.cvLabel")}</CardTitle>
-          <CardDescription>{t(messages, "setup.cvHint")}</CardDescription>
+          <CardDescription>
+            {t(messages, "setup.cvHint")}
+            {profileLoaded && cvText.trim() && (
+              <span className="ml-1 text-accent">
+                Auto-filled from your saved profile — edit if needed.
+              </span>
+            )}
+          </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4 pb-6">
+          <div>
+            <Label htmlFor="name">Your name (optional)</Label>
+            <Input
+              id="name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Pradakshina"
+            />
+          </div>
           <div
             onDragOver={(e) => {
               e.preventDefault();
@@ -415,29 +473,42 @@ export function SetupForm({ r2Configured }: { r2Configured: boolean }) {
               {cvError}
             </p>
           )}
+          <div className="flex items-center gap-3">
+            <Button
+              type="button"
+              variant="out"
+              onClick={saveProfileNow}
+              disabled={savingProfile || cvText.trim().length === 0}
+            >
+              {savingProfile ? "Saving…" : "Save to my profile"}
+            </Button>
+            {profileSaved && (
+              <span className="text-[13px] text-ok" role="status">
+                Saved ✓ — it'll auto-fill next time.
+              </span>
+            )}
+          </div>
         </CardContent>
       </Card>
 
-      {/* JD */}
+      {/* JD (optional) */}
       <Card>
         <CardHeader>
-          <CardTitle>{t(messages, "setup.jdLabel")}</CardTitle>
-          <CardDescription>{t(messages, "setup.jdHint")}</CardDescription>
+          <CardTitle>{t(messages, "setup.jdLabel")} · optional</CardTitle>
+          <CardDescription>
+            Paste a full job description, or just a role/title (e.g. “Senior
+            Product Manager”) and we’ll expand it. Leave blank for a general
+            practice interview.
+          </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-2 pb-6">
           <Textarea
             rows={6}
             value={jdText}
             onChange={(e) => setJdText(e.target.value)}
-            onBlur={() => setJdTouched(true)}
+            placeholder="Optional — role/title, a full JD, or leave blank"
             aria-label={t(messages, "setup.jdLabel")}
-            aria-invalid={jdTouched && Boolean(jdError)}
           />
-          {jdTouched && jdError && (
-            <p className="text-[13px] text-accent" role="alert">
-              {jdError}
-            </p>
-          )}
         </CardContent>
       </Card>
 

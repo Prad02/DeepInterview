@@ -29,9 +29,11 @@ from ..shared_models import (
 )
 from .cv_extract import extract_cv_text
 from .prompts import (
+    company_knowledge_prompts,
     company_research_prompts,
     cv_analysis_prompts,
     gap_matching_prompts,
+    general_practice_jd_prompts,
     jd_analysis_prompts,
     language_name,
     question_planner_prompts,
@@ -112,9 +114,15 @@ async def cv_analysis(state: PrepState, deps: Deps) -> PrepState:
 
 
 async def jd_analysis(state: PrepState, deps: Deps) -> PrepState:
-    """Extract a ``JobSpec`` from the job description text."""
+    """Extract a ``JobSpec`` from the job description — or, when none was given,
+    infer a general-practice role from the candidate's CV."""
     req = state["req"]
-    system, user = jd_analysis_prompts(req.jd_text, req.company)
+    if req.jd_text.strip():
+        system, user = jd_analysis_prompts(req.jd_text, req.company)
+    else:
+        # No JD/role provided → general practice for the candidate's own field.
+        log.info("jd_analysis: no JD given; building general-practice spec from CV")
+        system, user = general_practice_jd_prompts(state["cv_text"], req.company)
     try:
         job = await deps.llm.complete_json(system=system, user=user, schema=JobSpec)
     except Exception as exc:  # noqa: BLE001 - resilient: degrade, don't crash prep
@@ -158,20 +166,33 @@ async def company_research(state: PrepState, deps: Deps) -> PrepState:
 
     primary = req.language_mode.primary
 
-    queries: list[tuple[str, str]] = [(f"{company} interview process", "en")]
-    if primary != "en":
-        localized = f"{company} interview process {language_name(primary)}"
-        queries.append((localized, primary))
+    # Only run live web search when a REAL provider is configured. The default
+    # mock adapter returns deterministic placeholder rows (so an "empty results"
+    # check never fires), which would otherwise force a useless snippet summary.
+    # Without a real provider we research from the model's own knowledge instead.
+    real_search = (deps.settings.search_provider or "mock").lower() in {"tavily", "exa"}
 
     results = []
-    for query, lang in queries:
-        try:
-            results.extend(await deps.search.search(query, lang=lang, max_results=4))
-        except Exception as exc:  # noqa: BLE001 - search is best-effort
-            log.warning("company_research: search failed for %r (%s)", query, exc)
+    if real_search:
+        queries: list[tuple[str, str]] = [(f"{company} interview process", "en")]
+        if primary != "en":
+            localized = f"{company} interview process {language_name(primary)}"
+            queries.append((localized, primary))
+        for query, lang in queries:
+            try:
+                results.extend(await deps.search.search(query, lang=lang, max_results=4))
+            except Exception as exc:  # noqa: BLE001 - search is best-effort
+                log.warning("company_research: search failed for %r (%s)", query, exc)
 
-    snippets = "\n".join(f"- {r.title}: {r.snippet}" for r in results) or "(no results)"
-    system, user = company_research_prompts(company, snippets)
+    if results:
+        # Ground the summary in live web-search snippets.
+        snippets = "\n".join(f"- {r.title}: {r.snippet}" for r in results)
+        system, user = company_research_prompts(company, snippets)
+    else:
+        # No real search provider (or no hits): research from the model's own
+        # knowledge instead of returning empty intel — honest about staleness.
+        log.info("company_research: no web search; using LLM knowledge for %r", company)
+        system, user = company_knowledge_prompts(company)
     try:
         intel = await deps.llm.complete_json(
             system=system, user=user, schema=CompanyIntel

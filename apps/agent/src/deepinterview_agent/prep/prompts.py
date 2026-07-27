@@ -66,11 +66,35 @@ def jd_analysis_prompts(jd_text: str, company: str) -> tuple[str, str]:
     system = (
         "You are a hiring manager. Parse the job description into a structured job "
         "spec: title, seniority, must-have vs nice-to-have requirements, core "
-        "responsibilities, and the technology stack. Preserve the original text in "
-        "raw_text. Do not fabricate requirements the description does not state. "
+        "responsibilities, and the technology stack. The input may be a full "
+        "posting OR just a short role/title (e.g. 'Senior Product Manager') — if it "
+        "is only a title, expand it into a realistic spec for that role and "
+        "seniority using standard industry expectations. Preserve the original "
+        "input in raw_text. Respond ONLY with the requested schema."
+    )
+    user = f"TARGET COMPANY: {company}\n\nJOB DESCRIPTION OR ROLE:\n{jd_text}"
+    return system, user
+
+
+def general_practice_jd_prompts(cv_text: str, company: str) -> tuple[str, str]:
+    """Prompts for a ``JobSpec`` when NO job description/role was given.
+
+    Infers a sensible target role from the candidate's own CV so the interview
+    is a relevant general-practice session for their field and seniority.
+    """
+    system = (
+        "You are a hiring manager preparing a GENERAL PRACTICE interview because no "
+        "job description was provided. From the candidate's CV, infer the most "
+        "fitting target role and seniority for them, then produce a realistic job "
+        "spec for THAT role: title, seniority, the must-have and nice-to-have "
+        "skills a strong candidate would be expected to have, core "
+        "responsibilities, and a typical technology/skill stack. Base it on the "
+        "candidate's own field and level — this is practice for the kind of role "
+        "they are targeting. Put 'General practice (inferred from CV)' in raw_text. "
         "Respond ONLY with the requested schema."
     )
-    user = f"TARGET COMPANY: {company}\n\nJOB DESCRIPTION:\n{jd_text}"
+    company_line = f"TARGET COMPANY (optional): {company}\n\n" if company else ""
+    user = f"{company_line}CANDIDATE CV:\n{cv_text}"
     return system, user
 
 
@@ -89,6 +113,30 @@ def company_research_prompts(company: str, snippets: str) -> tuple[str, str]:
         "with the requested schema."
     )
     user = f"COMPANY: {company}\n\nWEB SEARCH SNIPPETS:\n{snippets}"
+    return system, user
+
+
+def company_knowledge_prompts(company: str) -> tuple[str, str]:
+    """Prompts to research a company from the MODEL'S OWN KNOWLEDGE (no web search).
+
+    Used when no search provider/key is configured. The model draws on its
+    training knowledge instead of live snippets, and is told to be honest about
+    uncertainty and staleness rather than fabricate specifics. Citations are left
+    empty (there are no sources).
+    """
+    system = (
+        "You are an interview-prep researcher. No live web search is available, so "
+        "use your own general knowledge of this company to help a candidate "
+        "prepare: a short company summary, industry, likely technology stack, "
+        "stated values/culture, the typical interview process and stages, and "
+        "notable context. Base this on what you actually know. If you are not "
+        "confident a company by this name exists or you know little about it, say "
+        "so briefly in the summary and leave the specific lists empty rather than "
+        "inventing details. Note in the summary that this is from general "
+        "knowledge and may be out of date, so the candidate should verify current "
+        "specifics. Leave citations empty. Respond ONLY with the requested schema."
+    )
+    user = f"COMPANY: {company}"
     return system, user
 
 
