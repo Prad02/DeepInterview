@@ -23,6 +23,19 @@ class Settings(BaseSettings):
     search_provider: str = "mock"
     embeddings_provider: str = "mock"
 
+    # --- live voice mode -----------------------------------------------------
+    # "cascaded"        = separate STT -> LLM -> TTS providers (the original path;
+    #                     needs Deepgram/Soniox + Cartesia/ElevenLabs + an LLM).
+    # "gemini_realtime" = Gemini Live speech-to-speech: a single GEMINI_API_KEY
+    #                     does listen + think + speak, no STT/TTS providers. The
+    #                     leanest voice setup (only Gemini + LiveKit). Override via
+    #                     LIVE_MODE. Prep/scoring still use LLM_PROVIDER separately.
+    live_mode: str = "cascaded"
+    # Gemini Live model + voice for gemini_realtime mode. Valid model ids come
+    # from livekit-plugins-google's LiveAPIModels; voice from its Voice list.
+    gemini_realtime_model: str = "gemini-2.5-flash-native-audio-preview-12-2025"
+    gemini_realtime_voice: str = "Puck"
+
     # --- model overrides (swap models without code changes via env) ----------
     # Two tiers, per the prep/live/post split:
     #   gemini_model      = analytic/background (prep, scoring) — newest Gemini 3

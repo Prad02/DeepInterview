@@ -197,6 +197,14 @@ def _require_live_providers(settings) -> None:
     checked, so this raises solely on genuine misconfiguration.
     """
     missing: list[str] = []
+    # Gemini Live realtime: one key powers STT+LLM+TTS, so only that is required.
+    if (settings.live_mode or "").lower() == "gemini_realtime":
+        if not settings.gemini_api_key:
+            raise RuntimeError(
+                "Live interview cannot start — LIVE_MODE=gemini_realtime needs "
+                "GEMINI_API_KEY."
+            )
+        return
     llm = (settings.llm_provider or "").lower()
     if llm == "gemini" and not settings.gemini_api_key:
         missing.append("GEMINI_API_KEY (LLM_PROVIDER=gemini)")
@@ -234,6 +242,29 @@ def build_llm(settings):
     from livekit.plugins import openai
 
     return openai.LLM()
+
+
+def build_realtime_llm(settings, language: str = "en"):
+    """Gemini Live speech-to-speech model (LIVE_MODE=gemini_realtime).
+
+    A single realtime model handles STT + LLM + TTS over one Gemini Live
+    connection, so the session needs no separate stt/tts plugins. Input/output
+    transcription is on by default in the plugin, so committed turns still reach
+    the transcript-capture wiring (and therefore scoring). ``language`` is the
+    interview's primary language (BCP-47-ish); Gemini Live auto-detects when it
+    isn't set, so we only pass it for our supported set.
+    """
+    from livekit.plugins.google import realtime as g_realtime
+
+    # NOTE: the native-audio models reject an explicit `language` code
+    # ("Unsupported language code 'en'") — they auto-detect and handle
+    # multilingual input natively, so we deliberately do NOT pass `language`.
+    return g_realtime.RealtimeModel(
+        api_key=settings.gemini_api_key,
+        model=settings.gemini_realtime_model,
+        voice=settings.gemini_realtime_voice,
+        temperature=0.8,
+    )
 
 
 # Languages Cartesia sonic speaks. Notably EXCLUDES Vietnamese — anything not in
@@ -444,17 +475,25 @@ async def entrypoint(ctx: JobContext) -> None:
     # Route STT/TTS by the interview's primary language so a non-English session
     # (e.g. Vietnamese) is both understood and spoken — not just prompted for.
     lang_mode = interview_ctx.plan.language_mode
-    session: AgentSession[InterviewUserdata] = AgentSession(
-        userdata=userdata,
-        stt=build_stt(settings, lang_mode.primary, lang_mode.mixed),
-        llm=build_llm(settings),
-        tts=build_tts(settings, lang_mode.primary),
-        vad=build_vad(ctx.proc),
-        # Lean live loop: preemptive generation is on by default in 1.5.x;
-        # turn_handling adds the noisy-environment defenses (semantic
-        # end-of-turn + word-gated interruptions — see build_turn_handling).
-        turn_handling=build_turn_handling(lang_mode.primary),
-    )
+    if (settings.live_mode or "").lower() == "gemini_realtime":
+        # Gemini Live speech-to-speech: one realtime model does STT+LLM+TTS and
+        # manages turn-taking server-side, so no stt/tts/vad/turn_handling.
+        session = AgentSession(
+            userdata=userdata,
+            llm=build_realtime_llm(settings, lang_mode.primary),
+        )
+    else:
+        session = AgentSession(
+            userdata=userdata,
+            stt=build_stt(settings, lang_mode.primary, lang_mode.mixed),
+            llm=build_llm(settings),
+            tts=build_tts(settings, lang_mode.primary),
+            vad=build_vad(ctx.proc),
+            # Lean live loop: preemptive generation is on by default in 1.5.x;
+            # turn_handling adds the noisy-environment defenses (semantic
+            # end-of-turn + word-gated interruptions — see build_turn_handling).
+            turn_handling=build_turn_handling(lang_mode.primary),
+        )
 
     # Persisted transcript = real committed turns (STT + agent speech), not
     # whatever the LLM chose to pass to save_answer.
