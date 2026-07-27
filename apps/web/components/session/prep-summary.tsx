@@ -100,6 +100,12 @@ export function PrepSummary({
     const q = persona ? `?persona=${encodeURIComponent(persona)}` : "";
     router.push(`/interview/${sessionId}${q}`);
   }, [router, sessionId, persona]);
+  // Text-mode practice — type answers instead of speaking. Works with no
+  // LiveKit/STT/TTS keys, so it's always available as a fallback to voice.
+  const goText = useCallback(
+    () => router.push(`/text/${sessionId}`),
+    [router, sessionId],
+  );
 
   const status = view?.status ?? "prep";
   const warnings = view?.prep_warnings ?? [];
@@ -117,6 +123,7 @@ export function PrepSummary({
 
       {status === "ready" && view?.context && (
         <ReadyView
+          onText={goText}
           context={view.context}
           warnings={warnings}
           onStart={goInterview}
@@ -630,11 +637,13 @@ function ReadyView({
   context,
   warnings,
   onStart,
+  onText,
   onBackToSetup,
 }: {
   context: InterviewContext;
   warnings: string[];
   onStart: () => void;
+  onText: () => void;
   onBackToSetup: () => void;
 }) {
   return (
@@ -666,8 +675,11 @@ function ReadyView({
       {/* CTA */}
       <div className="mt-8 flex flex-wrap items-center gap-3">
         <Button size="lg" onClick={onStart}>
-          Start interview
+          Start voice interview
           <ArrowRight className="h-4 w-4" aria-hidden />
+        </Button>
+        <Button variant="out" size="lg" onClick={onText}>
+          Practice by typing
         </Button>
         <Button variant="out" size="lg" onClick={onBackToSetup}>
           Back to setup

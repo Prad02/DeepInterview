@@ -14,15 +14,40 @@ capability-guarded: ids are unguessable uuid4.)
 
 from __future__ import annotations
 
+import datetime
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..core.deps import build_deps
-from ..shared_models import InterviewContext
+from ..shared_models import AnswerRecord, InterviewContext
 from .auth import require_internal_secret
 from .views import SessionView
 
 router = APIRouter()
+
+# Route-level ceiling on a single typed answer (Starlette imposes no default
+# body limit); generous enough for a long spoken-length answer.
+_MAX_ANSWER_LEN = 20_000
+
+
+def _utcnow_iso() -> str:
+    return datetime.datetime.now(datetime.UTC).isoformat()
+
+
+class TextAnswerRequest(BaseModel):
+    """Text-mode answer submission (the no-voice practice path).
+
+    The live voice worker records answers through ``/live-result``; this is the
+    parallel path for the browser text interview, where the candidate types
+    answers instead of speaking. API-internal shape, so it lives here rather
+    than in ``shared_models`` (keeps the TS↔Pydantic parity registry untouched).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    question_id: str
+    transcript: str
+    duration_sec: float | None = None
 
 
 class LiveResultRequest(BaseModel):
@@ -52,6 +77,40 @@ async def get_session(session_id: str) -> SessionView:
     if view is None:
         raise HTTPException(status_code=404, detail="Unknown session_id")
     return view
+
+
+@router.post("/api/session/{session_id}/answer")
+async def post_text_answer(session_id: str, req: TextAnswerRequest) -> dict:
+    """Record one typed answer for the browser text-interview path.
+
+    Capability-guarded by the unguessable session id (same no-auth model as the
+    session read). The session must be prepped (context present) and not yet
+    terminal. Timestamps are server-stamped; the transcript is what gets scored.
+    """
+    if len(req.transcript) > _MAX_ANSWER_LEN:
+        raise HTTPException(status_code=413, detail="Answer too long")
+    deps = build_deps()
+    view = await deps.repo.get_session_view(session_id)
+    if view is None:
+        raise HTTPException(status_code=404, detail="Unknown session_id")
+    if view.status in _TERMINAL_STATUSES:
+        raise HTTPException(status_code=409, detail=f"Session already {view.status}")
+    if view.context is None:
+        raise HTTPException(status_code=409, detail="Session prep not ready")
+    now = _utcnow_iso()
+    await deps.repo.append_answer(
+        session_id,
+        AnswerRecord(
+            question_id=req.question_id,
+            transcript=req.transcript,
+            started_at=now,
+            ended_at=now,
+            duration_sec=req.duration_sec,
+            followups_asked=[],
+        ),
+    )
+    answered = len([a for a in view.context.answers if (a.transcript or "").strip()]) + 1
+    return {"ok": True, "answered": answered}
 
 
 @router.post(
