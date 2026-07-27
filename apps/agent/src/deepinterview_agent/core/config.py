@@ -50,6 +50,12 @@ class Settings(BaseSettings):
     openai_realtime_base_url: str = "https://api.openai.com/v1"
     openai_realtime_model: str = "gpt-realtime"
     openai_realtime_voice: str = "marin"
+    # Push-to-talk: disable automatic turn detection in the realtime session and
+    # let the CANDIDATE control turns from the browser (unmute → talk → mute
+    # commits the turn and the interviewer replies). Avoids flaky/laggy auto
+    # end-of-turn detection. Override via PUSH_TO_TALK. One-flip revert to the
+    # auto path if the manual signalling misbehaves.
+    push_to_talk: bool = False
 
     # --- model overrides (swap models without code changes via env) ----------
     # Two tiers, per the prep/live/post split:

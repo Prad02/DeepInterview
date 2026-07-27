@@ -513,7 +513,12 @@ async def entrypoint(ctx: JobContext) -> None:
             if live_mode == "openai_realtime"
             else build_realtime_llm(settings, lang_mode.primary)
         )
-        session = AgentSession(userdata=userdata, llm=realtime_llm)
+        # Push-to-talk: the candidate drives turns from the browser (RPC below),
+        # so disable automatic end-of-turn detection.
+        session_kwargs: dict = {"userdata": userdata, "llm": realtime_llm}
+        if settings.push_to_talk:
+            session_kwargs["turn_detection"] = "manual"
+        session = AgentSession(**session_kwargs)
     else:
         session = AgentSession(
             userdata=userdata,
@@ -705,6 +710,35 @@ async def entrypoint(ctx: JobContext) -> None:
         room=ctx.room,
         **start_kwargs,
     )
+
+    # Push-to-talk: the browser drives turns via RPC. "ptt.start" (candidate
+    # unmutes and begins speaking) interrupts any agent speech and starts a fresh
+    # user turn; "ptt.end" (candidate mutes) commits the turn so the interviewer
+    # replies. Only registered in push_to_talk mode; the auto path is untouched.
+    if settings.push_to_talk:
+
+        async def _ptt_start(data) -> str:
+            try:
+                session.interrupt()
+                session.clear_user_turn()
+            except Exception:
+                log.exception("ptt.start failed")
+            return "ok"
+
+        async def _ptt_end(data) -> str:
+            try:
+                session.commit_user_turn()
+            except Exception:
+                log.exception("ptt.end failed")
+            return "ok"
+
+        try:
+            lp = ctx.room.local_participant
+            lp.register_rpc_method("ptt.start", _ptt_start)
+            lp.register_rpc_method("ptt.end", _ptt_end)
+            log.info("worker: push-to-talk RPC methods registered")
+        except Exception:
+            log.exception("worker: failed to register push-to-talk RPC methods")
 
     # Start the guard only once the session is live (it calls session.say /
     # session.shutdown); it runs detached until a ceiling trips or shutdown.

@@ -36,6 +36,7 @@ import {
   StartAudio,
   useConnectionState,
   useLocalParticipant,
+  useRemoteParticipants,
   useTranscriptions,
 } from "@livekit/components-react";
 import {
@@ -226,6 +227,7 @@ function LiveSession({
     connectionState === ConnectionState.SignalReconnecting;
 
   const { localParticipant, isMicrophoneEnabled } = useLocalParticipant();
+  const remoteParticipants = useRemoteParticipants();
   const transcriptions = useTranscriptions();
 
   const [ending, setEnding] = React.useState(false);
@@ -286,9 +288,36 @@ function LiveSession({
     return merged;
   }, [transcriptions, typedTurns, localParticipant.identity]);
 
-  async function toggleMute() {
+  // Signal the agent's push-to-talk turn control. No-ops harmlessly when the
+  // agent isn't in push-to-talk mode (the RPC method simply isn't registered,
+  // so the call throws and we swallow it) — the auto turn-detection path is
+  // unaffected.
+  async function signalTurn(method: "ptt.start" | "ptt.end") {
+    const agent = remoteParticipants[0];
+    if (!agent) return;
     try {
-      await localParticipant.setMicrophoneEnabled(!isMicrophoneEnabled);
+      await localParticipant.performRpc({
+        destinationIdentity: agent.identity,
+        method,
+        payload: "",
+      });
+    } catch {
+      // Not in push-to-talk mode (method unregistered) or transient — ignore.
+    }
+  }
+
+  async function toggleMute() {
+    const goingLive = !isMicrophoneEnabled;
+    try {
+      if (goingLive) {
+        // Start a fresh turn, THEN open the mic so all speech lands in it.
+        await signalTurn("ptt.start");
+        await localParticipant.setMicrophoneEnabled(true);
+      } else {
+        // Close the mic, THEN commit the turn so the interviewer replies.
+        await localParticipant.setMicrophoneEnabled(false);
+        await signalTurn("ptt.end");
+      }
       onMicError(null);
     } catch (error) {
       // getUserMedia rejection: permission denied / no device / device busy.
