@@ -10,9 +10,25 @@ from __future__ import annotations
 
 import asyncio
 
+from deepinterview_agent.core.config import Settings
 from deepinterview_agent.core.deps import build_deps
 from deepinterview_agent.prep import run_prep
 from deepinterview_agent.shared_models import InterviewContext, LanguageMode, PrepRequest
+
+
+def _mock_settings(**overrides) -> Settings:
+    """Deterministic mock-provider settings for a test, with overrides. Constructor
+    kwargs beat env/.env in pydantic-settings, so this is stable regardless of a
+    real .env being present."""
+    base = dict(
+        llm_provider="mock",
+        stt_provider="mock",
+        tts_provider="mock",
+        search_provider="mock",
+        embeddings_provider="mock",
+    )
+    base.update(overrides)
+    return Settings(**base)
 
 
 def _request(primary: str = "en", mixed: bool = False) -> PrepRequest:
@@ -68,16 +84,32 @@ def test_run_prep_pins_language_mode_for_non_english() -> None:
 
 
 def test_run_prep_maps_search_results_into_company_citations() -> None:
-    deps = build_deps()
+    # A REAL search provider is selected (tavily). Without a key it falls back to
+    # MockSearch, but `search_provider=tavily` makes company_research actually run
+    # web search and map the results into citations. (With the default mock
+    # provider, research now uses LLM knowledge and emits no citations — see the
+    # next test.)
+    deps = build_deps(_mock_settings(search_provider="tavily"))
     session_id = asyncio.run(run_prep(_request(), deps))
 
     ctx = asyncio.run(deps.repo.load_context(session_id))
     assert ctx is not None
-    # MockSearch returns results, which the company_research node maps to citations.
     assert ctx.company.citations, "expected company citations from search results"
     for c in ctx.company.citations:
         assert c.title
         assert c.url
+
+
+def test_run_prep_without_search_provider_uses_llm_knowledge_no_citations() -> None:
+    # No real search provider (default mock): company_research researches from the
+    # model's own knowledge instead of fabricating snippet citations, so the intel
+    # carries NO citations.
+    deps = build_deps(_mock_settings(search_provider="mock"))
+    session_id = asyncio.run(run_prep(_request(), deps))
+
+    ctx = asyncio.run(deps.repo.load_context(session_id))
+    assert ctx is not None
+    assert ctx.company.citations == [], "LLM-knowledge research must not invent citations"
 
 
 class _RecordingKnowledge:

@@ -589,3 +589,30 @@ def test_shutdown_repo_save_context_failure_marks_error_and_skips_scoring(
     assert ("update_status:error", drive.session_id) in drive.repo.calls
     assert build_deps().repo.get_status(drive.session_id) == "error"
     assert not any(u.endswith("/api/score") for u in drive.http.urls())
+
+
+# --- Gemini Live language pinning (regression: English transcribed as Hindi) ---
+
+
+def test_realtime_lang_code_maps_english_to_en_us() -> None:
+    """`en` must resolve to `en-US` — a code the native-audio model accepts.
+
+    Regression: leaving the language UNSET let Gemini Live auto-detect, which
+    transcribed accented English as Hindi. Bare `en` / `en-IN` are rejected by
+    the model, so the map must yield `en-US`.
+    """
+    settings = SimpleNamespace(gemini_realtime_language=None)
+    assert worker.realtime_lang_code("en", settings) == "en-US"
+
+
+def test_realtime_lang_code_env_override_wins() -> None:
+    """An explicit GEMINI_REALTIME_LANGUAGE override takes precedence over the map."""
+    settings = SimpleNamespace(gemini_realtime_language="en-GB")
+    assert worker.realtime_lang_code("en", settings) == "en-GB"
+
+
+def test_realtime_lang_code_unknown_language_falls_back_to_autodetect() -> None:
+    """An unmapped language (no verified code) returns None -> auto-detect, rather
+    than risk a session-killing 'Unsupported language code'."""
+    settings = SimpleNamespace(gemini_realtime_language=None)
+    assert worker.realtime_lang_code("vi", settings) is None
