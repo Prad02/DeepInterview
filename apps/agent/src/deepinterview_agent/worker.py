@@ -197,12 +197,20 @@ def _require_live_providers(settings) -> None:
     checked, so this raises solely on genuine misconfiguration.
     """
     missing: list[str] = []
-    # Gemini Live realtime: one key powers STT+LLM+TTS, so only that is required.
-    if (settings.live_mode or "").lower() == "gemini_realtime":
+    mode = (settings.live_mode or "").lower()
+    # Realtime speech-to-speech modes: one key powers STT+LLM+TTS.
+    if mode == "gemini_realtime":
         if not settings.gemini_api_key:
             raise RuntimeError(
                 "Live interview cannot start — LIVE_MODE=gemini_realtime needs "
                 "GEMINI_API_KEY."
+            )
+        return
+    if mode == "openai_realtime":
+        if not settings.openai_realtime_api_key:
+            raise RuntimeError(
+                "Live interview cannot start — LIVE_MODE=openai_realtime needs "
+                "OPENAI_REALTIME_API_KEY."
             )
         return
     llm = (settings.llm_provider or "").lower()
@@ -266,6 +274,25 @@ def build_realtime_llm(settings, language: str = "en"):
         model=settings.gemini_realtime_model,
         voice=settings.gemini_realtime_voice,
         temperature=0.8,
+    )
+
+
+def build_openai_realtime_llm(settings):
+    """OpenAI Realtime speech-to-speech model (LIVE_MODE=openai_realtime).
+
+    One OpenAI Realtime model does STT + LLM + TTS. We pass the realtime key and
+    pin ``base_url`` to api.openai.com EXPLICITLY: the plugin otherwise inherits
+    OPENAI_BASE_URL from the env, which here points at the cliproxy — and the
+    proxy can't relay the realtime WebSocket. Language is steered by the
+    interviewer system instruction (same as the Gemini path).
+    """
+    from livekit.plugins import openai as oai
+
+    return oai.realtime.RealtimeModel(
+        model=settings.openai_realtime_model,
+        voice=settings.openai_realtime_voice,
+        api_key=settings.openai_realtime_api_key,
+        base_url=settings.openai_realtime_base_url,
     )
 
 
@@ -477,13 +504,16 @@ async def entrypoint(ctx: JobContext) -> None:
     # Route STT/TTS by the interview's primary language so a non-English session
     # (e.g. Vietnamese) is both understood and spoken — not just prompted for.
     lang_mode = interview_ctx.plan.language_mode
-    if (settings.live_mode or "").lower() == "gemini_realtime":
-        # Gemini Live speech-to-speech: one realtime model does STT+LLM+TTS and
-        # manages turn-taking server-side, so no stt/tts/vad/turn_handling.
-        session = AgentSession(
-            userdata=userdata,
-            llm=build_realtime_llm(settings, lang_mode.primary),
+    live_mode = (settings.live_mode or "").lower()
+    if live_mode in ("gemini_realtime", "openai_realtime"):
+        # Realtime speech-to-speech: one model does STT+LLM+TTS and manages
+        # turn-taking server-side, so no stt/tts/vad/turn_handling.
+        realtime_llm = (
+            build_openai_realtime_llm(settings)
+            if live_mode == "openai_realtime"
+            else build_realtime_llm(settings, lang_mode.primary)
         )
+        session = AgentSession(userdata=userdata, llm=realtime_llm)
     else:
         session = AgentSession(
             userdata=userdata,

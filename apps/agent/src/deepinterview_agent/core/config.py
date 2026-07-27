@@ -30,11 +30,22 @@ class Settings(BaseSettings):
     #                     does listen + think + speak, no STT/TTS providers. The
     #                     leanest voice setup (only Gemini + LiveKit). Override via
     #                     LIVE_MODE. Prep/scoring still use LLM_PROVIDER separately.
+    #   "openai_realtime"  = OpenAI Realtime speech-to-speech (gpt-realtime): one
+    #                     OpenAI key does listen + think + speak. Uses the REAL
+    #                     api.openai.com (NOT the OPENAI_BASE_URL proxy, which
+    #                     can't relay the realtime WebSocket).
     live_mode: str = "cascaded"
     # Gemini Live model + voice for gemini_realtime mode. Valid model ids come
     # from livekit-plugins-google's LiveAPIModels; voice from its Voice list.
     gemini_realtime_model: str = "gemini-2.5-flash-native-audio-preview-12-2025"
     gemini_realtime_voice: str = "Puck"
+    # OpenAI Realtime (openai_realtime mode). Its own key + endpoint, kept
+    # SEPARATE from the text-path OPENAI_API_KEY/OPENAI_BASE_URL (which point at
+    # the cliproxy). Realtime must hit api.openai.com directly.
+    openai_realtime_api_key: str | None = None
+    openai_realtime_base_url: str = "https://api.openai.com/v1"
+    openai_realtime_model: str = "gpt-realtime"
+    openai_realtime_voice: str = "marin"
 
     # --- model overrides (swap models without code changes via env) ----------
     # Two tiers, per the prep/live/post split:
