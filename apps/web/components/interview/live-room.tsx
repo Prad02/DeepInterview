@@ -267,7 +267,13 @@ function LiveSession({
     for (const t of typedTurns) {
       entries.push({ at: t.at, id: t.id, role: "candidate", text: t.text });
     }
-    entries.sort((a, b) => a.at - b.at);
+    // Keep ARRIVAL order — `useTranscriptions()` already yields segments in the
+    // order they were spoken. Do NOT re-sort by `streamInfo.timestamp`: realtime
+    // (speech-to-speech) models stamp their transcription segments unreliably, so
+    // sorting shuffled a later interviewer reply next to an earlier one, and the
+    // consecutive-same-speaker merge below then fused two separate answers into
+    // one bubble (the "third turn logged with the first" bug). Arrival order
+    // keeps interviewer→candidate→interviewer distinct.
     const merged: Turn[] = [];
     for (const entry of entries) {
       const last = merged[merged.length - 1];
