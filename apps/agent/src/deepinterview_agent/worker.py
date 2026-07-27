@@ -244,28 +244,6 @@ def build_llm(settings):
     return openai.LLM()
 
 
-# Interview primary language -> BCP-47 code the Gemini Live NATIVE-AUDIO model
-# accepts. This model's accepted set is narrower than the general Live API:
-# "en-US" works but bare "en" and even "en-IN" are rejected (verified against the
-# API). Pinning a code is REQUIRED — with none set the model auto-detects and
-# mis-transcribes accented English (observed: English spoken as Hindi). Only
-# codes verified to be accepted belong here; an unmapped language falls back to
-# auto-detect rather than risk a session-killing "Unsupported language code".
-_REALTIME_LANG = {"en": "en-US"}
-
-
-def realtime_lang_code(primary: str, settings) -> str | None:
-    """Resolve the BCP-47 code to pin on the Gemini Live session.
-
-    Precedence: explicit GEMINI_REALTIME_LANGUAGE override → per-language map →
-    None (auto-detect) for languages we haven't verified a working code for.
-    """
-    override = getattr(settings, "gemini_realtime_language", None)
-    if override:
-        return override
-    return _REALTIME_LANG.get(primary)
-
-
 def build_realtime_llm(settings, language: str = "en"):
     """Gemini Live speech-to-speech model (LIVE_MODE=gemini_realtime).
 
@@ -273,21 +251,22 @@ def build_realtime_llm(settings, language: str = "en"):
     connection, so the session needs no separate stt/tts plugins. Input/output
     transcription is on by default in the plugin, so committed turns still reach
     the transcript-capture wiring (and therefore scoring).
+
+    IMPORTANT — do NOT pass an API ``language`` code here. The native-audio
+    models take their language from the SYSTEM INSTRUCTION (see
+    ``interviewer.language_directive``), not ``language_code``. Pinning the code
+    breaks the model's real-time audio path mid-session (1007
+    "CONTENT_TYPE_AUDIO is not supported for this model configuration"), which
+    freezes the interview. Language is steered by the interviewer prompt instead.
     """
     from livekit.plugins.google import realtime as g_realtime
 
-    kwargs: dict = {
-        "api_key": settings.gemini_api_key,
-        "model": settings.gemini_realtime_model,
-        "voice": settings.gemini_realtime_voice,
-        "temperature": 0.8,
-    }
-    # Pin the language so the model doesn't auto-detect (which mis-reads accented
-    # English as Hindi). Only pass a code we know the model accepts.
-    lang_code = realtime_lang_code(language, settings)
-    if lang_code:
-        kwargs["language"] = lang_code
-    return g_realtime.RealtimeModel(**kwargs)
+    return g_realtime.RealtimeModel(
+        api_key=settings.gemini_api_key,
+        model=settings.gemini_realtime_model,
+        voice=settings.gemini_realtime_voice,
+        temperature=0.8,
+    )
 
 
 # Languages Cartesia sonic speaks. Notably EXCLUDES Vietnamese — anything not in

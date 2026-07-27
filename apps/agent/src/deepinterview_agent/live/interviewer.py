@@ -40,9 +40,46 @@ def _wrap_signal() -> str:
     )
 
 
+# Human-readable names for the offered interview languages. Used to steer the
+# model's spoken + understood language (see the directive in build_instructions).
+_LANG_NAME = {
+    "en": "English",
+    "vi": "Vietnamese",
+    "es": "Spanish",
+    "zh": "Chinese",
+    "fr": "French",
+    "de": "German",
+    "ja": "Japanese",
+}
+
+
+def language_directive(primary: str, mixed: bool) -> str:
+    """A FIRM language instruction.
+
+    Gemini Live's native-audio models take their language from the conversation /
+    system instruction, NOT an API ``language_code`` (pinning that code breaks the
+    model's audio path — CONTENT_TYPE_AUDIO). A weak "Primary language: en" let
+    the model mis-hear accented English as another language (observed: Hindi), so
+    this states it strongly and tells the model to hold the language across turns.
+    """
+    name = _LANG_NAME.get(primary, primary)
+    if mixed:
+        return (
+            f"Conduct this interview primarily in {name}, but the candidate may "
+            f"mix in English — understand both. Always reply in {name}."
+        )
+    return (
+        f"Conduct this ENTIRE interview in {name}. Speak only {name}, and "
+        f"interpret the candidate's spoken answers as {name} even if their accent "
+        f"is unfamiliar. Do NOT switch to, or transcribe their speech as, any "
+        f"other language."
+    )
+
+
 def build_instructions(ud: InterviewUserdata) -> str:
     """Lean per-question system prompt: compact summary + current question."""
     primary = ud.ctx.plan.language_mode.primary
+    mixed = ud.ctx.plan.language_mode.mixed
     summary = state.compact_summary(ud)
     q = state.current_question(ud)
     question_line = (
@@ -52,7 +89,7 @@ def build_instructions(ud: InterviewUserdata) -> str:
         "You are a senior, friendly technical interviewer running a real-time "
         "voice mock interview. Speak naturally and concisely.\n\n"
         f"{summary}\n\n"
-        f"Primary language: {primary}.\n"
+        f"{language_directive(primary, mixed)}\n"
         f"Current question to ask: {question_line}\n\n"
         "Ask this one question, listen to the full answer, then ask at most one "
         "light follow-up. When the answer is complete, call save_answer with the "

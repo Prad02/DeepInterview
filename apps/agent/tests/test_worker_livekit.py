@@ -591,28 +591,24 @@ def test_shutdown_repo_save_context_failure_marks_error_and_skips_scoring(
     assert not any(u.endswith("/api/score") for u in drive.http.urls())
 
 
-# --- Gemini Live language pinning (regression: English transcribed as Hindi) ---
+# --- Gemini Live language steering (regression: English transcribed as Hindi) ---
+# The native-audio model's language is set by the SYSTEM INSTRUCTION, not an API
+# language_code (pinning that code broke the audio path — CONTENT_TYPE_AUDIO).
+# So the fix lives in interviewer.language_directive, asserted here.
 
 
-def test_realtime_lang_code_maps_english_to_en_us() -> None:
-    """`en` must resolve to `en-US` — a code the native-audio model accepts.
+def test_language_directive_english_is_firm_and_names_the_language() -> None:
+    from deepinterview_agent.live.interviewer import language_directive
 
-    Regression: leaving the language UNSET let Gemini Live auto-detect, which
-    transcribed accented English as Hindi. Bare `en` / `en-IN` are rejected by
-    the model, so the map must yield `en-US`.
-    """
-    settings = SimpleNamespace(gemini_realtime_language=None)
-    assert worker.realtime_lang_code("en", settings) == "en-US"
+    d = language_directive("en", mixed=False)
+    assert "English" in d
+    # Must firmly forbid switching languages (this is what stops the Hindi drift).
+    assert "other language" in d.lower() or "only English" in d
 
 
-def test_realtime_lang_code_env_override_wins() -> None:
-    """An explicit GEMINI_REALTIME_LANGUAGE override takes precedence over the map."""
-    settings = SimpleNamespace(gemini_realtime_language="en-GB")
-    assert worker.realtime_lang_code("en", settings) == "en-GB"
+def test_language_directive_mixed_allows_english_mixing() -> None:
+    from deepinterview_agent.live.interviewer import language_directive
 
-
-def test_realtime_lang_code_unknown_language_falls_back_to_autodetect() -> None:
-    """An unmapped language (no verified code) returns None -> auto-detect, rather
-    than risk a session-killing 'Unsupported language code'."""
-    settings = SimpleNamespace(gemini_realtime_language=None)
-    assert worker.realtime_lang_code("vi", settings) is None
+    d = language_directive("vi", mixed=True)
+    assert "Vietnamese" in d
+    assert "English" in d

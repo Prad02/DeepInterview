@@ -35,13 +35,6 @@ class Settings(BaseSettings):
     # from livekit-plugins-google's LiveAPIModels; voice from its Voice list.
     gemini_realtime_model: str = "gemini-2.5-flash-native-audio-preview-12-2025"
     gemini_realtime_voice: str = "Puck"
-    # BCP-47 language code pinned on the Gemini Live session. MUST be set: with no
-    # code the model auto-detects and, for accented English, often mis-detects
-    # (e.g. transcribing English speech as Hindi). The native-audio model accepts
-    # only specific codes — "en-US" works; bare "en" and "en-IN" are rejected
-    # (verified against the Live API). Leave unset (None) to fall back to the
-    # per-language map in the worker. Override via GEMINI_REALTIME_LANGUAGE.
-    gemini_realtime_language: str | None = None
 
     # --- model overrides (swap models without code changes via env) ----------
     # Two tiers, per the prep/live/post split:
