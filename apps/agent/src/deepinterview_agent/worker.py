@@ -67,8 +67,15 @@ def wire_audio_path_logging(ctx: JobContext, session) -> None:
         log.info("audio-path: track SUBSCRIBED kind=%s from %s", _kind(pub), p.identity)
 
     @ctx.room.on("track_muted")
-    def _on_muted(pub, p) -> None:
-        log.info("audio-path: track MUTED kind=%s by %s", _kind(pub), p.identity)
+    def _on_muted(*args) -> None:
+        # The (publication, participant) arg order varies across SDK versions —
+        # find the participant defensively so this log line can never throw
+        # ("RemoteTrackPublication has no attribute identity") on every mute.
+        ident = next(
+            (getattr(a, "identity", None) for a in args if getattr(a, "identity", None)),
+            "?",
+        )
+        log.info("audio-path: track MUTED by %s", ident)
 
     for p in ctx.room.remote_participants.values():
         pubs = {sid: _kind(pub) for sid, pub in p.track_publications.items()}
