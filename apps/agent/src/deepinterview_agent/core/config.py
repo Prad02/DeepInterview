@@ -43,6 +43,12 @@ class Settings(BaseSettings):
     # it can't drive this interview flow. Override via GEMINI_REALTIME_MODEL.
     gemini_realtime_model: str = "gemini-2.5-flash-native-audio-preview-12-2025"
     gemini_realtime_voice: str = "Puck"
+    # How long a silence (ms) before the model decides the candidate finished
+    # their turn. The Live API default is short (~800ms), which cuts people off
+    # mid-thought; this raises it so natural pauses don't end the turn. Pair with
+    # LOW end-of-speech sensitivity (set in build_realtime_llm). Tune via
+    # GEMINI_REALTIME_SILENCE_MS — lower = snappier, higher = more patient.
+    gemini_realtime_silence_ms: int = 1500
     # OpenAI Realtime (openai_realtime mode). Its own key + endpoint, kept
     # SEPARATE from the text-path OPENAI_API_KEY/OPENAI_BASE_URL (which point at
     # the cliproxy). Realtime must hit api.openai.com directly.

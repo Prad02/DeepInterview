@@ -267,13 +267,25 @@ def build_realtime_llm(settings, language: str = "en"):
     "CONTENT_TYPE_AUDIO is not supported for this model configuration"), which
     freezes the interview. Language is steered by the interviewer prompt instead.
     """
+    from google.genai import types as g_types
     from livekit.plugins.google import realtime as g_realtime
 
+    # End-of-turn tuning: make the model WAIT LONGER before deciding the
+    # candidate has finished, so a natural mid-answer pause doesn't get cut off.
+    # LOW end-of-speech sensitivity + a generous silence window; both tunable via
+    # env (GEMINI_REALTIME_SILENCE_MS) so it can be dialed to taste.
+    input_cfg = g_types.RealtimeInputConfig(
+        automatic_activity_detection=g_types.AutomaticActivityDetection(
+            end_of_speech_sensitivity=g_types.EndSensitivity.END_SENSITIVITY_LOW,
+            silence_duration_ms=settings.gemini_realtime_silence_ms,
+        )
+    )
     return g_realtime.RealtimeModel(
         api_key=settings.gemini_api_key,
         model=settings.gemini_realtime_model,
         voice=settings.gemini_realtime_voice,
         temperature=0.8,
+        realtime_input_config=input_cfg,
     )
 
 
