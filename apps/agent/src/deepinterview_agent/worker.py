@@ -283,6 +283,11 @@ def build_realtime_llm(settings, language: str = "en"):
     # env (GEMINI_REALTIME_SILENCE_MS) so it can be dialed to taste.
     input_cfg = g_types.RealtimeInputConfig(
         automatic_activity_detection=g_types.AutomaticActivityDetection(
+            # HIGH start sensitivity: notice the moment the candidate STARTS
+            # speaking (so the beginning of the answer isn't clipped). LOW end
+            # sensitivity + a long silence window: only treat the turn as OVER
+            # after a clear multi-second pause, never on a mid-thought breath.
+            start_of_speech_sensitivity=g_types.StartSensitivity.START_SENSITIVITY_HIGH,
             end_of_speech_sensitivity=g_types.EndSensitivity.END_SENSITIVITY_LOW,
             silence_duration_ms=settings.gemini_realtime_silence_ms,
         )

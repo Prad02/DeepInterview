@@ -42,13 +42,18 @@ class Settings(BaseSettings):
     # the faster flash-live model raises "generate_reply is not compatible", so
     # it can't drive this interview flow. Override via GEMINI_REALTIME_MODEL.
     gemini_realtime_model: str = "gemini-2.5-flash-native-audio-preview-12-2025"
-    gemini_realtime_voice: str = "Puck"
+    # Interviewer voice. Charon = calm, measured, professional — fits a recruiter
+    # persona better than the default upbeat "Puck". Any name from the plugin's
+    # Voice list works (Kore/Aoede/Leda are good alternatives). Override via
+    # GEMINI_REALTIME_VOICE.
+    gemini_realtime_voice: str = "Charon"
     # How long a silence (ms) before the model decides the candidate finished
     # their turn. The Live API default is short (~800ms), which cuts people off
-    # mid-thought; this raises it so natural pauses don't end the turn. Pair with
-    # LOW end-of-speech sensitivity (set in build_realtime_llm). Tune via
-    # GEMINI_REALTIME_SILENCE_MS — lower = snappier, higher = more patient.
-    gemini_realtime_silence_ms: int = 1500
+    # mid-thought. 5000ms honors "only treat me as done after a >5s pause" —
+    # the model still transcribes and understands WHILE you speak; this only
+    # controls when it decides your turn is OVER. Pair with LOW end-of-speech
+    # sensitivity (set in build_realtime_llm). Tune via GEMINI_REALTIME_SILENCE_MS.
+    gemini_realtime_silence_ms: int = 5000
     # OpenAI Realtime (openai_realtime mode). Its own key + endpoint, kept
     # SEPARATE from the text-path OPENAI_API_KEY/OPENAI_BASE_URL (which point at
     # the cliproxy). Realtime must hit api.openai.com directly.
